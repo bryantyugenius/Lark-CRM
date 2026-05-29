@@ -21,7 +21,7 @@ async def startup():
     print("✅ Lark CRM Bot started")
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "Lark CRM Bot running"}
 

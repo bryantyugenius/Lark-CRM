@@ -7,7 +7,6 @@ import asyncio
 
 from app.database import init_db, get_db, Contact, Interaction, Relationship
 from app.lark_client import LarkClient
-from app.asr import transcribe_voice
 from app.ai_extract import extract_structured, ExtractedInteraction
 
 
@@ -95,13 +94,9 @@ async def handle_message(event: dict):
             await lark.reply_text(chat_id, message_id, "❌ 无法获取语音文件，请重新发送")
             return
 
-        # Step 2: 下载语音文件
-        voice_bytes = await lark.download_voice(file_key)
-        print(f"  Downloaded voice: {len(voice_bytes)} bytes")
-
-        # Step 3: ASR 语音转文字
+        # Step 2: 用 Lark 自带语音识别转文字（免费）
         await lark.reply_text(chat_id, message_id, "🔄 正在识别语音...")
-        text = await transcribe_voice(voice_bytes)
+        text = await lark.speech_to_text(file_key)
         print(f"  ASR result: {text}")
 
         if not text or len(text.strip()) < 2:

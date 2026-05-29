@@ -4,3 +4,4 @@ __pycache__/
 crm.db
 venv/
 .env.local
+.workbuddy/

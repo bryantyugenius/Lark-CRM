@@ -72,6 +72,26 @@ class LarkClient:
                 },
             )
 
+    async def speech_to_text(self, file_key: str) -> str:
+        """使用 Lark 自带语音识别转文字"""
+        voice_bytes = await self.download_voice(file_key)
+        token = await self.get_access_token()
+        url = f"{LARK_API_BASE}/speech_to_text/v1/speech/file_recognize"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/octet-stream",
+                },
+                content=voice_bytes,
+            )
+            data = resp.json()
+            if data.get("code") == 0:
+                return data.get("data", {}).get("text", "")
+            else:
+                raise Exception(f"Lark speech_to_text error: {data}")
+
     async def send_card(self, chat_id: str, msg_id: str, card: dict):
         token = await self.get_access_token()
         url = f"{LARK_API_BASE}/im/v1/messages"

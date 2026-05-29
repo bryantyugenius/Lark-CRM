@@ -41,6 +41,7 @@ async def lark_webhook(request: Request):
     Lark 事件订阅 Webhook 入口。
     """
     body = await request.json()
+    print(f"📩 Raw event: {json.dumps(body, ensure_ascii=False)[:300]}")
 
     # URL 验证挑战
     if body.get("type") == "url_verification":
@@ -71,6 +72,16 @@ async def handle_message(event: dict):
     sender_id = message.get("sender", {}).get("sender_id", {}).get("user_id", "")
 
     print(f"  msg_type={msg_type}, chat_id={chat_id}, sender={sender_id}")
+
+    # 文字消息：给个提示
+    if msg_type == "text":
+        text_content = json.loads(message.get("content", "{}")).get("text", "")
+        print(f"  text: {text_content[:100]}")
+        await lark.reply_text(
+            chat_id, message_id,
+            "👋 我收到了你的消息！\n\n目前我主要处理**语音消息**——请发一段语音，我会自动识别并记录跟进信息。"
+        )
+        return
 
     # 只处理语音消息
     if msg_type != "audio":

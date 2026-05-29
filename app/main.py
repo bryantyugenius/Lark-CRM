@@ -3,6 +3,8 @@ from fastapi.responses import JSONResponse
 import httpx
 import json
 import os
+import re
+from typing import Optional
 import asyncio
 
 from app.database import init_db, get_db, Contact, Interaction, Relationship
@@ -85,6 +87,24 @@ async def lark_webhook(request: Request):
     return JSONResponse(content={"success": True})
 
 
+# ── 指令检测 ──
+
+_META_COMMANDS = [
+    (r"帮(我|忙).*(做|弄|搞|写|开发|创建|建|搭建|生成)", "dev_request"),
+    (r"(你能|你会|你有).*(做什么|啥|什么功能|哪些功能)", "capability"),
+    (r"(怎么用|如何用|使用说明|帮助|help)", "help"),
+    (r"(查询|搜索|找一下|列出|显示|看看).*", "query"),
+]
+
+
+def _detect_meta_command(text: str) -> Optional[str]:
+    """检测是否为对机器人的指令，而非 CRM 数据录入"""
+    for pattern, cmd_type in _META_COMMANDS:
+        if re.search(pattern, text):
+            return cmd_type
+    return None
+
+
 async def handle_message(event: dict):
     message = event.get("message", {})
     msg_type = message.get("message_type")
@@ -98,6 +118,14 @@ async def handle_message(event: dict):
     if msg_type == "text":
         text = json.loads(message.get("content", "{}")).get("text", "")
         print(f"  text: {text[:100]}")
+
+        # 先检测是否为对机器人的指令
+        cmd_type = _detect_meta_command(text)
+        if cmd_type:
+            print(f"  🎯 Meta command detected: {cmd_type}")
+            await handle_meta_command(chat_id, message_id, cmd_type, text)
+            return
+
         await process_text_input(chat_id, message_id, sender_id, text)
         return
 
@@ -129,6 +157,50 @@ async def handle_message(event: dict):
             import traceback
             traceback.print_exc()
             await lark.reply_text(chat_id, message_id, f"❌ 处理失败：{str(e)[:200]}")
+
+
+async def handle_meta_command(chat_id: str, message_id: str, cmd_type: str, text: str):
+    """处理对机器人的指令类消息"""
+    if cmd_type == "dev_request":
+        await lark.reply_text(
+            chat_id, message_id,
+            "🤖 我目前是一个**语音CRM录入助手**，专用于：\n"
+            "• 接收你的语音/文字跟进记录\n"
+            "• 自动提取客户、意图、下一步行动\n"
+            "• 写入结构化数据库\n\n"
+            "如果你需要**搭建新功能**（如多维表格同步、可视化面板等），"
+            "请直接在 WorkBuddy 里告诉余柏阳，他会帮你开发部署。\n\n"
+            "现在你可以试试直接发一段跟进记录给我，比如：\n"
+            "「跟广州永津生物黄康约了下周一电话」"
+        )
+    elif cmd_type == "capability":
+        await lark.reply_text(
+            chat_id, message_id,
+            "🤖 我是你的 **CRM 语音助手**，可以：\n"
+            "• 📝 接收语音/文字跟进记录\n"
+            "• 👤 自动识别客户姓名、公司、职位\n"
+            "• 📅 解析日期（明天、下周一、下个月5号）\n"
+            "• 🏷️ 分类意图（报价/签约/跟进/介绍）\n"
+            "• 💾 存入数据库，随时可查\n\n"
+            "直接发文字或语音就行，我会自动处理。"
+        )
+    elif cmd_type == "help":
+        await lark.reply_text(
+            chat_id, message_id,
+            "📋 使用方式：\n\n"
+            "**发文字**：直接描述跟进情况\n"
+            "示例：「今天拜访了北京生物王博士，他对NK细胞培养基很感兴趣，报价已发」\n\n"
+            "**发语音**：长按说话，我会自动转文字并提取\n\n"
+            "我会自动识别：客户名 → 公司 → 意图 → 下一步 → 日期\n\n"
+            "有问题？在 WorkBuddy 里找余柏阳 👨‍💻"
+        )
+    elif cmd_type == "query":
+        await lark.reply_text(
+            chat_id, message_id,
+            "🔍 查询功能还在开发中，暂时请到 WorkBuddy 让余柏阳帮你查。"
+        )
+    else:
+        await lark.reply_text(chat_id, message_id, "🤔 没太理解你的意思，试试直接发一段跟进记录？")
 
 
 async def process_text_input(chat_id: str, message_id: str, sender_id: str, text: str):

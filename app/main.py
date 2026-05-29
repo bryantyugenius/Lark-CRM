@@ -35,21 +35,42 @@ def decrypt_lark_message(encrypt_key: str, body: dict) -> dict:
     return body
 
 
-@app.post("/webhook/lark")
+@app.api_route("/webhook/lark", methods=["GET", "POST", "HEAD"])
 async def lark_webhook(request: Request):
     """
     Lark 事件订阅 Webhook 入口。
     """
-    body = await request.json()
-    print(f"📩 Raw event: {json.dumps(body, ensure_ascii=False)[:300]}")
+    # 记录所有请求
+    print(f"📥 [{request.method}] {request.url.path} from {request.client.host if request.client else 'unknown'}")
+    
+    # GET/HEAD 请求：用于健康检查
+    if request.method in ("GET", "HEAD"):
+        return JSONResponse(content={"status": "ok", "message": "Lark webhook endpoint"}, status_code=200)
 
-    # URL 验证挑战
-    if body.get("type") == "url_verification":
-        return {"challenge": body.get("challenge"), "token": body.get("token")}
+    # POST 请求处理
+    try:
+        body = await request.json()
+    except Exception:
+        body_text = await request.body()
+        print(f"📩 Non-JSON body ({len(body_text)} bytes): {body_text[:200]}")
+        return JSONResponse(content={"error": "invalid json"}, status_code=400)
+
+    print(f"📩 Event body keys: {list(body.keys())}")
+    print(f"📩 Raw event (first 500 chars): {json.dumps(body, ensure_ascii=False)[:500]}")
+
+    # URL 验证挑战（优先处理，不管是否加密）
+    challenge = body.get("challenge")
+    if body.get("type") == "url_verification" or challenge:
+        print(f"✅ URL verification: challenge={challenge[:20] if challenge else 'N/A'}...")
+        # Lark 只期望 {"challenge": "xxx"}
+        resp = {"challenge": challenge}
+        print(f"✅ Returning: {resp}")
+        return JSONResponse(content=resp, status_code=200)
 
     # 解密（如配置了 ENCRYPT_KEY）
     encrypt_key = os.getenv("LARK_ENCRYPT_KEY", "")
     if encrypt_key and body.get("encrypt"):
+        print("🔐 Encrypted body detected, decrypting...")
         body = decrypt_lark_message(encrypt_key, body)
 
     header = body.get("header", {})

@@ -94,55 +94,52 @@ async def handle_message(event: dict):
 
     print(f"  msg_type={msg_type}, chat_id={chat_id}, sender={sender_id}")
 
-    # 文字消息：给个提示
+    # 文字消息
     if msg_type == "text":
-        text_content = json.loads(message.get("content", "{}")).get("text", "")
-        print(f"  text: {text_content[:100]}")
-        await lark.reply_text(
-            chat_id, message_id,
-            "👋 我收到了你的消息！\n\n目前我主要处理**语音消息**——请发一段语音，我会自动识别并记录跟进信息。"
-        )
+        text = json.loads(message.get("content", "{}")).get("text", "")
+        print(f"  text: {text[:100]}")
+        await process_text_input(chat_id, message_id, sender_id, text)
         return
 
-    # 只处理语音消息
-    if msg_type != "audio":
-        return
+    # 语音消息
+    if msg_type == "audio":
+        try:
+            content_data = json.loads(message.get("content", "{}"))
+            file_key = content_data.get("file_key")
+            print(f"  content parsed: {json.dumps(content_data, ensure_ascii=False)[:200]}")
+            print(f"  file_key: {file_key}")
 
+            if not file_key:
+                await lark.reply_text(chat_id, message_id, "❌ 无法获取语音文件，请重新发送")
+                return
+
+            # 语音识别
+            await lark.reply_text(chat_id, message_id, "🔄 正在识别语音...")
+            text = await lark.speech_to_text(file_key)
+            print(f"  ASR result: {text}")
+
+            if not text or len(text.strip()) < 2:
+                await lark.reply_text(chat_id, message_id, "❌ 语音识别结果为空，请重新发送")
+                return
+
+            await process_text_input(chat_id, message_id, sender_id, text)
+
+        except Exception as e:
+            print(f"  ❌ Error handling audio: {e}")
+            import traceback
+            traceback.print_exc()
+            await lark.reply_text(chat_id, message_id, f"❌ 处理失败：{str(e)[:200]}")
+
+
+async def process_text_input(chat_id: str, message_id: str, sender_id: str, text: str):
+    """统一处理文字输入（直接文字 或 语音转文字后的结果）"""
     try:
-        # Step 1: 获取消息详情（拿 file_key）
-        msg_detail = await lark.get_message_content(message_id)
-        print(f"  msg_detail: {json.dumps(msg_detail, ensure_ascii=False)[:200]}")
-
-        # Lark 消息结构：msg_type=audio 时，audio 字段里有 file_key
-        file_key = None
-        audio_info = msg_detail.get("data", {}).get("audio", {})
-        if audio_info:
-            file_key = audio_info.get("file_key")
-        # 也尝试从 message 本体直接拿
-        if not file_key:
-            file_key = message.get("audio", {}).get("file_key")
-
-        if not file_key:
-            await lark.reply_text(chat_id, message_id, "❌ 无法获取语音文件，请重新发送")
-            return
-
-        # Step 2: 用 Lark 自带语音识别转文字（免费）
-        await lark.reply_text(chat_id, message_id, "🔄 正在识别语音...")
-        text = await lark.speech_to_text(file_key)
-        print(f"  ASR result: {text}")
-
-        if not text or len(text.strip()) < 2:
-            await lark.reply_text(chat_id, message_id, "❌ 语音识别结果为空，请重新发送")
-            return
-
-        # Step 4: AI 提取结构化信息
-        await lark.reply_text(
-            chat_id, message_id, f"🔄 正在理解内容...\n识别文字：{text[:100]}"
-        )
+        # AI 提取结构化信息
+        await lark.reply_text(chat_id, message_id, f"🔄 正在理解内容...\n{text[:100]}")
         extracted = await extract_structured(text)
         print(f"  Extracted: contact={extracted.contact}, content={extracted.content}")
 
-        # Step 5: 写入数据库
+        # 写入数据库
         db = next(get_db())
         try:
             contact = None
@@ -181,16 +178,15 @@ async def handle_message(event: dict):
                 f"  ✅ Saved to DB: contact={contact_name}, "
                 f"interaction_id={interaction.id}"
             )
-
         finally:
             db.close()
 
-        # Step 6: 回复确认卡片
+        # 回复确认卡片
         card = build_confirmation_card(extracted, contact, text)
         await lark.send_card(chat_id, message_id, card)
 
     except Exception as e:
-        print(f"  ❌ Error handling message: {e}")
+        print(f"  ❌ Error processing input: {e}")
         import traceback
         traceback.print_exc()
         await lark.reply_text(chat_id, message_id, f"❌ 处理失败：{str(e)[:200]}")

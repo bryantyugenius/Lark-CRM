@@ -8,7 +8,13 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./crm.db")
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
-    engine = create_engine(DATABASE_URL)
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,       # 每次使用前检测连接是否存活
+        pool_recycle=300,         # 5 分钟后强制回收连接（Neon 超时为 5min）
+        pool_size=3,              # 少量连接（免费版够用）
+        max_overflow=2,
+    )
 
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()

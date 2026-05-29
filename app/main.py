@@ -20,12 +20,71 @@ lark = LarkClient()
 async def startup():
     init_db()
     print("✅ Database initialized")
+
+    # ── 诊断：打印 AI 模型配置 ──
+    import app.ai_extract as ai_mod
+    model = getattr(ai_mod, "MODEL", "unknown")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    key_prefix = os.getenv("OPENAI_API_KEY", "")[:8] + "..." if os.getenv("OPENAI_API_KEY") else "NOT SET"
+    print(f"🧠 AI Config: model={model}, base_url={base_url}, key={key_prefix}")
     print("✅ Lark CRM Bot started")
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "Lark CRM Bot running"}
+
+
+@app.get("/debug/ai")
+async def debug_ai():
+    """诊断 AI 连接状态——从浏览器打开即可验证 DeepSeek 是否接通"""
+    import app.ai_extract as ai_mod
+
+    model = getattr(ai_mod, "MODEL", "unknown")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    key_masked = api_key[:8] + "..." if api_key else "NOT SET"
+
+    result = {
+        "config": {
+            "model": model,
+            "base_url": base_url,
+            "api_key_prefix": key_masked,
+        },
+        "test": None,
+    }
+
+    if not api_key:
+        result["test"] = {"status": "FAIL", "error": "OPENAI_API_KEY not set"}
+        return result
+
+    # 测试一次实际的 AI 调用
+    try:
+        import time
+        start = time.time()
+        extracted = await ai_mod.extract_structured("跟张三约了明天下午见面聊报价")
+        elapsed = round(time.time() - start, 2)
+
+        result["test"] = {
+            "status": "OK",
+            "elapsed_sec": elapsed,
+            "input": "跟张三约了明天下午见面聊报价",
+            "output": {
+                "contact_name": extracted.contact.name if extracted.contact else None,
+                "contact_company": extracted.contact.company if extracted.contact else None,
+                "intent": extracted.intent,
+                "next_action": extracted.next_action,
+                "next_action_at": extracted.next_action_at,
+            },
+        }
+    except Exception as e:
+        result["test"] = {
+            "status": "FAIL",
+            "error": str(e)[:300],
+            "error_type": type(e).__name__,
+        }
+
+    return result
 
 
 @app.get("/health")
@@ -91,16 +150,34 @@ async def lark_webhook(request: Request):
 
 _META_COMMANDS = [
     (r"帮(我|忙).*(做|弄|搞|写|开发|创建|建|搭建|生成)", "dev_request"),
-    (r"(你能|你会|你有).*(做什么|啥|什么功能|哪些功能)", "capability"),
-    (r"(怎么用|如何用|使用说明|帮助|help)", "help"),
+    (r"(你能|你还会|你还能|你都会|你有|你会).*(做|干|会)(什么|啥|哪些|吗)", "capability"),
+    (r"(怎么用|如何用|如何使用|使用说明|帮助|help|功能|介绍下|介绍一下)", "help"),
     (r"(查询|搜索|找一下|列出|显示|看看).*", "query"),
+    (r"^(stop|exit|quit|取消|退出|算了|不用了|再见|拜拜)\s*$", "quit"),
+]
+
+# 短消息黑名单：少于 5 个汉字且不包含人名/公司/日期关键词，视为无效
+_INVALID_SHORT = [
+    r"^[?？!！.。,，]+$",           # 纯标点
+    r"^[a-zA-Z0-9\s]{1,10}$",     # 纯英文数字短句（如 "ok", "test", "stop"）
 ]
 
 
 def _detect_meta_command(text: str) -> Optional[str]:
     """检测是否为对机器人的指令，而非 CRM 数据录入"""
+    t = text.strip()
+
+    # 短消息过滤：纯标点、短英文、无实际内容的短消息
+    if len(t) < 10:
+        # 如果包含中文，检查是否有 CRM 相关关键词
+        has_crm_keywords = re.search(r"(约|见|聊|拜访|报[价价]|合同|签|订[单]|电话|沟通|跟进|联系)", t)
+        if not has_crm_keywords:
+            for pattern in _INVALID_SHORT:
+                if re.search(pattern, t):
+                    return "invalid"
+
     for pattern, cmd_type in _META_COMMANDS:
-        if re.search(pattern, text):
+        if re.search(pattern, t):
             return cmd_type
     return None
 
@@ -199,6 +276,15 @@ async def handle_meta_command(chat_id: str, message_id: str, cmd_type: str, text
             chat_id, message_id,
             "🔍 查询功能还在开发中，暂时请到 WorkBuddy 让余柏阳帮你查。"
         )
+    elif cmd_type == "quit":
+        await lark.reply_text(
+            chat_id, message_id,
+            "👋 好的，有跟进记录直接发给我就行。"
+        )
+    elif cmd_type == "invalid":
+        # 短消息/无意义输入——不回任何东西，避免刷屏
+        print(f"  🚫 Ignored invalid short input: {text[:50]}")
+        return
     else:
         await lark.reply_text(chat_id, message_id, "🤔 没太理解你的意思，试试直接发一段跟进记录？")
 
